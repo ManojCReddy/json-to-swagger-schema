@@ -738,6 +738,136 @@
   $('copyIn').addEventListener('click', function () { copy(this, 'input'); });
   $('copyOut').addEventListener('click', function () { copy(this, 'output'); });
 
+  /* ---------------- Find / Replace ---------------- */
+  var BTN = 'px-2 py-1 rounded border border-slate-700 hover:bg-slate-700';
+  var FIELD = 'bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-sm min-w-0 flex-1 outline-none focus:ring-1 focus:ring-indigo-500 normal-case tracking-normal text-slate-200';
+  var finders = {};
+
+  function makeFinder(taId, canReplace) {
+    var ta = $(taId);
+    var bar = document.createElement('div');
+    bar.className = 'hidden flex-col gap-1 px-3 py-2 bg-[#161b22] border-t border-slate-800 text-xs normal-case tracking-normal';
+    bar.innerHTML =
+      '<div class="flex flex-wrap items-center gap-1">' +
+        '<input data-r="find" placeholder="Find" aria-label="Find" class="' + FIELD + '">' +
+        '<button data-r="prev" title="Previous (Shift+Enter)" aria-label="Previous match" class="' + BTN + '">↑</button>' +
+        '<button data-r="next" title="Next (Enter)" aria-label="Next match" class="' + BTN + '">↓</button>' +
+        '<button data-r="case" title="Match case" aria-label="Match case" aria-pressed="false" class="' + BTN + '">Aa</button>' +
+        '<button data-r="word" title="Whole word" aria-label="Whole word" aria-pressed="false" class="' + BTN + '">W</button>' +
+        '<span data-r="count" class="text-slate-400 w-16 text-center"></span>' +
+        '<button data-r="close" title="Close (Esc)" aria-label="Close" class="' + BTN + '">✕</button>' +
+      '</div>' +
+      (canReplace ?
+      '<div class="flex flex-wrap items-center gap-1">' +
+        '<input data-r="repl" placeholder="Replace" aria-label="Replace" class="' + FIELD + '">' +
+        '<button data-r="one" class="' + BTN + '">Replace</button>' +
+        '<button data-r="all" class="' + BTN + '">Replace all</button>' +
+      '</div>' : '');
+    ta.parentNode.insertBefore(bar, ta);
+    var q = function (n) { return bar.querySelector('[data-r="' + n + '"]'); };
+    var findEl = q('find'), replEl = q('repl'), countEl = q('count');
+    var opts = { 'case': false, word: false };
+
+    function regex() {
+      var term = findEl.value;
+      if (!term) return null;
+      var src = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (opts.word) src = '(?<![A-Za-z0-9_])' + src + '(?![A-Za-z0-9_])';
+      return new RegExp(src, opts['case'] ? 'g' : 'gi');
+    }
+    function matches() {
+      var re = regex(), out = [], m;
+      if (!re) return out;
+      while ((m = re.exec(ta.value))) { out.push({ s: m.index, e: m.index + m[0].length }); if (!m[0].length) re.lastIndex++; }
+      return out;
+    }
+    function select(m, all) {
+      var keep = document.activeElement === findEl || document.activeElement === replEl ? document.activeElement : null;
+      ta.focus();
+      ta.setSelectionRange(m.s, m.e);
+      if (keep) keep.focus();
+      var i = all.indexOf(m) + 1;
+      countEl.textContent = i + ' of ' + all.length;
+    }
+    function step(dir) {
+      var all = matches();
+      if (!all.length) { countEl.textContent = findEl.value ? 'No results' : ''; return false; }
+      var pos = dir > 0 ? ta.selectionEnd : ta.selectionStart, pick;
+      if (dir > 0) pick = all.filter(function (m) { return m.s >= pos; })[0] || all[0];
+      else pick = all.filter(function (m) { return m.e <= pos; }).pop() || all[all.length - 1];
+      select(pick, all);
+      return true;
+    }
+    function changed() {
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    function replaceOne() {
+      var all = matches(), s = ta.selectionStart, e = ta.selectionEnd;
+      var cur = all.filter(function (m) { return m.s === s && m.e === e; })[0];
+      if (!cur) { step(1); return; }
+      ta.setRangeText(replEl.value, s, e, 'end');
+      changed();
+      step(1);
+    }
+    function replaceAll() {
+      var re = regex();
+      if (!re) return;
+      var n = 0, rep = replEl.value;
+      ta.value = ta.value.replace(re, function () { n++; return rep; });
+      countEl.textContent = n + ' replaced';
+      changed();
+    }
+    function toggle(name, btn) {
+      opts[name] = !opts[name];
+      btn.setAttribute('aria-pressed', String(opts[name]));
+      setActive(btn, opts[name]);
+      step(1);
+    }
+    function open(focusReplace) {
+      var sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+      if (sel && sel.indexOf('\n') < 0) findEl.value = sel;
+      bar.classList.remove('hidden'); bar.classList.add('flex');
+      (focusReplace && replEl ? replEl : findEl).focus();
+      (focusReplace && replEl ? replEl : findEl).select();
+    }
+    function close() {
+      bar.classList.add('hidden'); bar.classList.remove('flex');
+      ta.focus();
+    }
+
+    q('next').addEventListener('click', function () { step(1); });
+    q('prev').addEventListener('click', function () { step(-1); });
+    q('case').addEventListener('click', function () { toggle('case', this); });
+    q('word').addEventListener('click', function () { toggle('word', this); });
+    q('close').addEventListener('click', close);
+    if (canReplace) {
+      q('one').addEventListener('click', replaceOne);
+      q('all').addEventListener('click', replaceAll);
+      replEl.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); replaceOne(); } });
+    }
+    findEl.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); step(ev.shiftKey ? -1 : 1); }
+    });
+    findEl.addEventListener('input', function () { countEl.textContent = ''; });
+    bar.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') { ev.preventDefault(); close(); } });
+    setActive(q('case'), false); setActive(q('word'), false);
+    return { ta: ta, bar: bar, open: open };
+  }
+
+  finders.input = makeFinder('input', true);
+  finders.output = makeFinder('output', false);
+
+  document.addEventListener('keydown', function (ev) {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
+    var k = ev.key.toLowerCase();
+    if (k !== 'f' && k !== 'h') return;
+    var target = finders.input, active = document.activeElement;
+    if (finders.output.ta === active || finders.output.bar.contains(active)) target = finders.output;
+    ev.preventDefault();
+    // Output is read-only (regenerated from input), so Ctrl+H falls back to find there
+    target.open(k === 'h');
+  });
+
   $('input').value = inputs.A;
   render();
   window.__converter = { parseYaml: parseYaml, toYaml: toYaml, jsonToSpecYaml: jsonToSpecYaml, specToJson: specToJson };
