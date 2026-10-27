@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JSON ⇄ Swagger / OpenAPI Schema</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  textarea { tab-size: 2; resize: none; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body class="bg-[#0d1117] text-slate-200 h-screen flex flex-col font-sans">
+
+<header class="flex flex-wrap items-center gap-4 px-5 py-3 border-b border-slate-800 bg-[#010409]">
+  <div class="flex items-center gap-2">
+    <span class="w-3 h-3 rounded-full bg-red-500"></span><span class="w-3 h-3 rounded-full bg-yellow-400"></span><span class="w-3 h-3 rounded-full bg-green-500"></span>
+    <h1 class="ml-3 font-semibold tracking-tight text-slate-100">JSON <span class="text-indigo-400">⇄</span> Swagger Schema</h1>
+  </div>
+
+  <div id="modeSwitch" class="flex rounded-lg bg-slate-800 p-1 text-sm" role="tablist">
+    <button id="modeA" data-mode="A" class="mode-btn px-3 py-1 rounded-md">JSON → Swagger/OpenAPI YAML</button>
+    <button id="modeB" data-mode="B" class="mode-btn px-3 py-1 rounded-md">Swagger/OpenAPI YAML → JSON</button>
+  </div>
+
+  <div id="optsA" class="flex items-center gap-2 text-sm">
+    <label for="spec" class="text-slate-400">Spec</label>
+    <select id="spec" class="bg-slate-800 border border-slate-700 rounded-md px-2 py-1">
+      <option value="3.1">OpenAPI 3.1</option>
+      <option value="3.0">OpenAPI 3.0</option>
+      <option value="2.0">Swagger 2.0</option>
+    </select>
+    <label for="schemaName" class="text-slate-400 ml-2">Name</label>
+    <input id="schemaName" value="Model" class="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 w-32">
+    <span id="detected" class="ml-2 text-xs px-2 py-1 rounded-full bg-indigo-500/20 text-indigo-300 hidden"></span>
+  </div>
+
+  <div id="optsB" class="hidden flex items-center gap-2 text-sm">
+    <label class="text-slate-400">Output</label>
+    <div class="flex rounded-lg bg-slate-800 p-1">
+      <button data-out="schema" class="out-btn px-3 py-1 rounded-md">JSON Schema</button>
+      <button data-out="mock" class="out-btn px-3 py-1 rounded-md">Mock JSON Payload</button>
+    </div>
+  </div>
+
+  <button id="sample" class="ml-auto text-sm px-3 py-1 rounded-md border border-slate-700 hover:bg-slate-800">Load sample</button>
+</header>
+
+<div id="error" class="hidden items-start gap-2 px-5 py-2 bg-red-950 border-b border-red-800 text-red-200 text-sm" role="alert">
+  <span>⚠</span><span id="errorMsg" class="font-mono whitespace-pre-wrap"></span>
+</div>
+
+<main class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2">
+  <section class="flex flex-col min-h-0 border-r border-slate-800">
+    <div class="flex items-center justify-between px-4 py-2 bg-[#161b22] text-xs uppercase tracking-wider text-slate-400">
+      <span id="inLabel">Input</span>
+      <button id="copyIn" class="copy-btn normal-case px-2 py-1 rounded border border-slate-700 hover:bg-slate-700">Copy</button>
+    </div>
+    <textarea id="input" spellcheck="false" class="flex-1 min-h-0 w-full bg-[#0d1117] p-4 font-mono text-sm text-emerald-200 outline-none focus:ring-1 focus:ring-indigo-500"></textarea>
+  </section>
+  <section class="flex flex-col min-h-0">
+    <div class="flex items-center justify-between px-4 py-2 bg-[#161b22] text-xs uppercase tracking-wider text-slate-400">
+      <span id="outLabel">Output</span>
+      <button id="copyOut" class="copy-btn normal-case px-2 py-1 rounded border border-slate-700 hover:bg-slate-700">Copy</button>
+    </div>
+    <textarea id="output" readonly spellcheck="false" class="flex-1 min-h-0 w-full bg-[#0d1117] p-4 font-mono text-sm text-sky-200 outline-none"></textarea>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------------- YAML emitter ---------------- */
+  function yamlScalar(v) {
+    if (v === null) return 'null';
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    var s = String(v);
+    if (s === '' || /^[\s]|[\s]$/.test(s) || /^[-?:,\[\]{}#&*!|>'"%@`]/.test(s) ||
+        /: |\s#|[\n\r\t]/.test(s) || /:$/.test(s) ||
+        /^(true|false|null|yes|no|on|off|~)$/i.test(s) || /^[-+]?(\d[\d_]*\.?\d*([eE][-+]?\d+)?|\.\d+|0x[0-9a-f]+)$/i.test(s)) {
+      return JSON.stringify(s);
+    }
+    return s;
+  }
+  function isObj(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
+  function toYaml(v, indent) {
+    var pad = new Array(indent + 1).join(' ');
+    var lines = [];
+    if (Array.isArray(v)) {
+      if (!v.length) return pad + '[]';
+      v.forEach(function (item) {
+        if (isObj(item) && Object.keys(item).length) {
+          var sub = toYaml(item, indent + 2).split('\n');
+          sub[0] = pad + '- ' + sub[0].slice(indent + 2);
+          lines.push(sub.join('\n'));
+        } else if (Array.isArray(item) && item.length) {
+          var s2 = toYaml(item, indent + 2).split('\n');
+          s2[0] = pad + '- ' + s2[0].slice(indent + 2);
+          lines.push(s2.join('\n'));
+        } else lines.push(pad + '- ' + inlineEmpty(item));
+      });
+    } else if (isObj(v)) {
+      var keys = Object.keys(v);
+      if (!keys.length) return pad + '{}';
+      keys.forEach(function (k) {
+        var val = v[k], key = yamlScalar(k);
+        if ((isObj(val) && Object.keys(val).length) || (Array.isArray(val) && val.length)) {
+          lines.push(pad + key + ':\n' + toYaml(val, indent + 2));
+        } else lines.push(pad + key + ': ' + inlineEmpty(val));
+      });
+    } else return pad + yamlScalar(v);
+    return lines.join('\n');
+  }
+  function inlineEmpty(v) {
+    if (Array.isArray(v)) return '[]';
+    if (isObj(v)) return '{}';
+    return yamlScalar(v);
+  }
+
+  /* ---------------- YAML parser (block + flow subset) ---------------- */
+  function stripComment(line) {
+    var q = null;
+    for (var i = 0; i < line.length; i++) {
+      var c = line[i];
+      if (q) { if (c === '\\' && q === '"') i++; else if (c === q) q = null; }
+      else if (c === '"' || c === "'") { if (i === 0 || /[\s\[{,:-]/.test(line[i - 1])) q = c; }
+      else if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+    }
+    return line;
+  }
+  function parseScalar(s) {
+    s = s.trim();
+    if (s === '' || s === '~' || /^null$/i.test(s)) return null;
+    if (/^(true|false)$/i.test(s)) return s.toLowerCase() === 'true';
+    if (/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(s)) return Number(s);
+    if (s[0] === '"') {
+      try { return JSON.parse(s); } catch (e) { throw new Error('Invalid double-quoted string: ' + s); }
+    }
+    if (s[0] === "'") {
+      if (s[s.length - 1] !== "'" || s.length < 2) throw new Error('Unterminated string: ' + s);
+      return s.slice(1, -1).replace(/''/g, "'");
+    }
+    if (s[0] === '[' || s[0] === '{') return parseFlow(s);
+    return s;
+  }
+  function parseFlow(s) {
+    var i = 0;
+    function ws() { while (i < s.length && /\s/.test(s[i])) i++; }
+    function val() {
+      ws();
+      if (s[i] === '[') {
+        i++; var arr = []; ws();
+        if (s[i] === ']') { i++; return arr; }
+        for (;;) {
+          arr.push(val()); ws();
+          if (s[i] === ',') { i++; ws(); if (s[i] === ']') { i++; return arr; } continue; }
+          if (s[i] === ']') { i++; return arr; }
+          throw new Error('Malformed flow sequence: ' + s);
+        }
+      }
+      if (s[i] === '{') {
+        i++; var o = {}; ws();
+        if (s[i] === '}') { i++; return o; }
+        for (;;) {
+          ws(); var k = token(':}'); ws();
+          if (s[i] !== ':') throw new Error('Malformed flow mapping: ' + s);
+          i++; o[k] = val(); ws();
+          if (s[i] === ',') { i++; continue; }
+          if (s[i] === '}') { i++; return o; }
+          throw new Error('Malformed flow mapping: ' + s);
+        }
+      }
+      return parseScalar(rawToken(',]}'));
+    }
+    function token(stops) { var t = rawToken(stops); var p = parseScalar(t); return p === null ? '' : String(p); }
+    function rawToken(stops) {
+      ws(); var st = i, q = s[i];
+      if (q === '"' || q === "'") {
+        i++;
+        while (i < s.length && s[i] !== q) { if (s[i] === '\\' && q === '"') i++; i++; }
+        if (i >= s.length) throw new Error('Unterminated string in: ' + s);
+        i++;
+        return s.slice(st, i);
+      }
+      while (i < s.length && stops.indexOf(s[i]) < 0) i++;
+      return s.slice(st, i);
+    }
+    var r = val(); ws();
+    if (i < s.length) throw new Error('Unexpected trailing content: ' + s.slice(i));
+    return r;
+  }
+  function splitKey(text) {
+    var q = null;
+    for (var i = 0; i < text.length; i++) {
+      var c = text[i];
+      if (q) { if (c === '\\' && q === '"') i++; else if (c === q) q = null; continue; }
+      if ((c === '"' || c === "'") && i === 0) { q = c; continue; }
+      if (c === ':' && (i === text.length - 1 || text[i + 1] === ' ')) {
+        var k = text.slice(0, i).trim();
+        var pk = parseScalar(k);
+        return { key: pk === null ? 'null' : String(pk), rest: text.slice(i + 1).trim() };
+      }
+    }
+    return null;
+  }
+  function parseYaml(text) {
+    if (/\t/.test(text.replace(/^[^\S\n]*$/gm, '').match(/^\t+/m) || '')) throw new Error('YAML does not allow tab indentation.');
+    var raw = text.split(/\r?\n/), lines = [];
+    raw.forEach(function (l, n) {
+      if (/^\s*(---|\.\.\.)\s*$/.test(l)) return;
+      var c = stripComment(l);
+      if (!c.trim()) return;
+      lines.push({ indent: c.match(/^ */)[0].length, text: c.trim(), n: n + 1 });
+    });
+    if (!lines.length) throw new Error('Input is empty.');
+    var pos = 0;
+
+    function fail(msg, ln) { throw new Error('Line ' + (ln ? ln.n : '?') + ': ' + msg); }
+
+    function parseBlock(indent) {
+      var ln = lines[pos];
+      if (ln.text === '-' || ln.text.indexOf('- ') === 0) return parseSeq(ln.indent);
+      if (splitKey(ln.text)) return parseMap(ln.indent);
+      pos++;
+      return parseScalar(ln.text);
+    }
+    function parseValueAfter(rest, parentIndent, ln, allowSameIndentSeq) {
+      if (rest === '|' || rest === '>' || /^[|>][+-]?$/.test(rest)) return parseBlockScalar(rest, parentIndent);
+      if (rest !== '') {
+        // multi-line flow collections
+        if ((rest[0] === '[' || rest[0] === '{')) {
+          var acc = rest;
+          while (!balanced(acc) && pos < lines.length) { acc += ' ' + lines[pos].text; pos++; }
+          if (!balanced(acc)) fail('Unterminated flow collection.', ln);
+          return wrap(function () { return parseFlow(acc); }, ln);
+        }
+        return wrap(function () { return parseScalar(rest); }, ln);
+      }
+      var nx = lines[pos];
+      if (nx && nx.indent > parentIndent) return parseBlock(nx.indent);
+      if (allowSameIndentSeq && nx && nx.indent === parentIndent && (nx.text === '-' || nx.text.indexOf('- ') === 0)) return parseSeq(nx.indent);
+      return null;
+    }
+    function wrap(fn, ln) { try { return fn(); } catch (e) { fail(e.message, ln); } }
+    function balanced(s) {
+      var d = 0, q = null;
+      for (var i = 0; i < s.length; i++) {
+        var c = s[i];
+        if (q) { if (c === '\\' && q === '"') i++; else if (c === q) q = null; }
+        else if (c === '"' || c === "'") q = c;
+        else if (c === '[' || c === '{') d++;
+        else if (c === ']' || c === '}') d--;
+      }
+      return d <= 0;
+    }
+    function parseBlockScalar(style, parentIndent) {
+      var out = [], base = null;
+      while (pos < lines.length && lines[pos].indent > parentIndent) {
+        if (base === null) base = lines[pos].indent;
+        out.push(new Array(Math.max(0, lines[pos].indent - base) + 1).join(' ') + lines[pos].text);
+        pos++;
+      }
+      var joined = style[0] === '|' ? out.join('\n') : out.join(' ');
+      return style.indexOf('-') < 0 ? joined + '\n' : joined;
+    }
+    function parseMap(indent) {
+      var obj = {};
+      while (pos < lines.length) {
+        var ln = lines[pos];
+        if (ln.indent < indent) break;
+        if (ln.indent > indent) fail('Unexpected indentation.', ln);
+        if (ln.text === '-' || ln.text.indexOf('- ') === 0) break;
+        var kv = splitKey(ln.text);
+        if (!kv) fail('Expected "key: value" but found "' + ln.text + '".', ln);
+        if (Object.prototype.hasOwnProperty.call(obj, kv.key)) fail('Duplicate key "' + kv.key + '".', ln);
+        pos++;
+        obj[kv.key] = parseValueAfter(kv.rest, indent, ln, true);
+      }
+      return obj;
+    }
+    function parseSeq(indent) {
+      var arr = [];
+      while (pos < lines.length) {
+        var ln = lines[pos];
+        if (ln.indent !== indent || !(ln.text === '-' || ln.text.indexOf('- ') === 0)) {
+          if (ln.indent > indent) fail('Unexpected indentation.', ln);
+          break;
+        }
+        var rest = ln.text.slice(1).trim();
+        if (rest === '') {
+          pos++;
+          var nx = lines[pos];
+          arr.push(nx && nx.indent > indent ? parseBlock(nx.indent) : null);
+        } else if (rest.indexOf('- ') === 0 || rest === '-' || (splitKey(rest) && rest[0] !== '[' && rest[0] !== '{' )) {
+          // nested structure starting on the dash line: rewrite as virtual line
+          var off = ln.text.length - ln.text.slice(1).replace(/^\s+/, '').length;
+          lines[pos] = { indent: indent + off, text: rest, n: ln.n };
+          arr.push(parseBlock(indent + off));
+        } else {
+          pos++;
+          arr.push(parseValueAfter(rest, indent, ln, false));
+        }
+      }
+      return arr;
+    }
+
+    var result = parseBlock(lines[0].indent);
+    if (pos < lines.length) fail('Unexpected content "' + lines[pos].text + '".', lines[pos]);
+    return result;
+  }
+
+  /* ---------------- Mode A: JSON -> spec YAML ---------------- */
+  function isJsonSchema(o) {
+    return isObj(o) && (o.hasOwnProperty('$schema') || isObj(o.properties) ||
+      (typeof o.type === 'string' && /^(object|array|string|number|integer|boolean|null)$/.test(o.type) && (o.items !== undefined || o.properties !== undefined)));
+  }
+  function inferFormat(s) {
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(s)) return 'date-time';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return 'date';
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return 'email';
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return 'uuid';
+    if (/^https?:\/\/\S+$/i.test(s)) return 'uri';
+    return null;
+  }
+  function inferSchema(v) {
+    if (v === null) return { type: 'null' };
+    if (Array.isArray(v)) {
+      var s = { type: 'array' };
+      if (v.length) {
+        var items = v.map(inferSchema).reduce(mergeSchemas);
+        s.items = items;
+      } else s.items = {};
+      return s;
+    }
+    switch (typeof v) {
+      case 'string': var f = inferFormat(v), r = { type: 'string' }; if (f) r.format = f; return r;
+      case 'number': return { type: Number.isInteger(v) ? 'integer' : 'number' };
+      case 'boolean': return { type: 'boolean' };
+    }
+    var props = {}, req = [];
+    Object.keys(v).forEach(function (k) { props[k] = inferSchema(v[k]); if (v[k] !== null) req.push(k); });
+    var o = { type: 'object', properties: props };
+    if (req.length) o.required = req;
+    return o;
+  }
+  function mergeSchemas(a, b) {
+    if (a.type === 'null' && b.type !== 'null') { b = clone(b); b.__nullable = true; return b; }
+    if (b.type === 'null' && a.type !== 'null') { a = clone(a); a.__nullable = true; return a; }
+    if (a.type === 'integer' && b.type === 'number') return merged(b, a);
+    if (a.type === 'number' && b.type === 'integer') return merged(a, b);
+    if (a.type !== b.type) return a.type === 'object' || b.type === 'object' ? {} : { oneOf: [strip(a), strip(b)] };
+    var r = clone(a);
+    if (a.__nullable || b.__nullable) r.__nullable = true;
+    if (a.format !== b.format) delete r.format;
+    if (a.type === 'object') {
+      var props = {}, req = [];
+      Object.keys(a.properties).forEach(function (k) {
+        props[k] = b.properties[k] ? mergeSchemas(a.properties[k], b.properties[k]) : a.properties[k];
+        if ((a.required || []).indexOf(k) >= 0 && (b.required || []).indexOf(k) >= 0) req.push(k);
+      });
+      Object.keys(b.properties).forEach(function (k) { if (!props[k]) props[k] = b.properties[k]; });
+      r.properties = props;
+      if (req.length) r.required = req; else delete r.required;
+    } else if (a.type === 'array') {
+      r.items = Object.keys(a.items).length && Object.keys(b.items).length ? mergeSchemas(a.items, b.items) : (Object.keys(a.items).length ? a.items : b.items);
+    }
+    return r;
+  }
+  function merged(x, y) { var r = clone(x); if (y.__nullable) r.__nullable = true; return r; }
+  function strip(s) { var r = clone(s); delete r.__nullable; return r; }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  var DROP_ALWAYS = ['$schema', '$id', '$comment', '$defs', 'definitions'];
+
+  // Convert a JSON schema into the target dialect. Returns new object.
+  function convertSchema(s, spec, rootRefs) {
+    if (Array.isArray(s)) return s.map(function (x) { return convertSchema(x, spec, rootRefs); });
+    if (!isObj(s)) return s;
+    var o = {}, nullable = !!s.__nullable;
+    Object.keys(s).forEach(function (k) {
+      var v = s[k];
+      if (k === '__nullable') return;
+      if (k === '$schema' || k === '$id' || k === '$comment') return;
+      if ((k === '$defs' || k === 'definitions') ) return;
+      if (k === 'properties' || k === 'patternProperties') {
+        o[k] = {};
+        Object.keys(v || {}).forEach(function (p) { o[k][p] = convertSchema(v[p], spec, rootRefs); });
+      } else if (k === 'example' || k === 'examples' || k === 'default' || k === 'enum' || k === 'const') {
+        o[k] = v;
+      } else if (k === '$ref' && typeof v === 'string') {
+        o[k] = rewriteRef(v, spec);
+      } else o[k] = convertSchema(v, spec, rootRefs);
+    });
+    if (spec !== '3.1') {
+      if (Array.isArray(o.type)) {
+        var nonNull = o.type.filter(function (t) { return t !== 'null'; });
+        if (nonNull.length !== o.type.length) nullable = true;
+        if (nonNull.length === 1) o.type = nonNull[0];
+        else if (nonNull.length === 0) delete o.type;
+        else { o.oneOf = nonNull.map(function (t) { return { type: t }; }); delete o.type; }
+      }
+      if (o.type === 'null') { delete o.type; nullable = true; }
+      if (o.hasOwnProperty('const')) { o.enum = [o.const]; delete o.const; }
+      if (Array.isArray(o.examples)) { if (o.examples.length) o.example = o.examples[0]; delete o.examples; }
+      if (typeof o.exclusiveMinimum === 'number') { o.minimum = o.exclusiveMinimum; o.exclusiveMinimum = true; }
+      if (typeof o.exclusiveMaximum === 'number') { o.maximum = o.exclusiveMaximum; o.exclusiveMaximum = true; }
+      if (nullable) {
+        if (spec === '2.0') o['x-nullable'] = true; else o.nullable = true;
+      }
+      if (spec === '2.0') {
+        ['oneOf', 'anyOf'].forEach(function (k) {
+          if (o[k]) { o['x-' + k] = o[k]; delete o[k]; }
+        });
+      }
+    } else if (nullable) {
+      if (typeof o.type === 'string') o.type = [o.type, 'null'];
+      else if (Array.isArray(o.type)) { if (o.type.indexOf('null') < 0) o.type.push('null'); }
+      else o = { oneOf: [o, { type: 'null' }] };
+    }
+    return o;
+  }
+  function rewriteRef(ref, spec) {
+    var m = /^#\/(?:\$defs|definitions|components\/schemas)\/(.+)$/.exec(ref);
+    if (!m) return ref;
+    return spec === '2.0' ? '#/definitions/' + m[1] : '#/components/schemas/' + m[1];
+  }
+
+  function jsonToSpecYaml(text, spec, name) {
+    var data;
+    try { data = JSON.parse(text); }
+    catch (e) { throw new Error('Invalid JSON: ' + e.message); }
+    var schema, kind, extra = {};
+    if (isJsonSchema(data)) {
+      kind = 'JSON Schema';
+      schema = data;
+      var defs = Object.assign({}, data.definitions || {}, data.$defs || {});
+      Object.keys(defs).forEach(function (k) { extra[k] = convertSchema(defs[k], spec); });
+    } else {
+      kind = 'JSON payload';
+      schema = inferSchema(data);
+    }
+    var conv = convertSchema(schema, spec);
+    var title = (name || '').trim() || 'Model';
+    var doc = {};
+    var target = {};
+    target[title] = conv;
+    Object.keys(extra).forEach(function (k) { if (k !== title) target[k] = extra[k]; });
+    if (spec === '2.0') doc.definitions = target;
+    else doc.components = { schemas: target };
+    var header = (spec === '2.0' ? 'swagger: "2.0"' : 'openapi: ' + (spec === '3.1' ? '3.1.0' : '3.0.3')) + '\n';
+    var yaml = header + toYaml(doc, 0);
+    return { text: yaml, kind: kind };
+  }
+
+  /* ---------------- Mode B: spec YAML -> JSON Schema / mock ---------------- */
+  var SCHEMA_KEYS = ['type', 'properties', 'items', '$ref', 'allOf', 'oneOf', 'anyOf', 'enum', 'format'];
+  function looksLikeSchema(o) { return isObj(o) && SCHEMA_KEYS.some(function (k) { return o.hasOwnProperty(k); }); }
+
+  function extractSchema(doc) {
+    if (!isObj(doc)) throw new Error('Expected a YAML mapping describing a schema or component block.');
+    var pool = {}, root = null;
+    var registries = [];
+    if (isObj(doc.components) && isObj(doc.components.schemas)) registries.push(doc.components.schemas);
+    if (isObj(doc.definitions)) registries.push(doc.definitions);
+    if (isObj(doc.schemas)) registries.push(doc.schemas);
+    registries.forEach(function (r) { Object.keys(r).forEach(function (k) { pool[k] = r[k]; }); });
+    if (registries.length) {
+      var first = Object.keys(registries[0])[0];
+      if (first === undefined) throw new Error('No schemas found in the component block.');
+      root = registries[0][first];
+      return { root: root, name: first, pool: pool };
+    }
+    if (looksLikeSchema(doc)) return { root: doc, name: null, pool: pool };
+    var keys = Object.keys(doc);
+    if (keys.length && keys.every(function (k) { return looksLikeSchema(doc[k]); })) {
+      keys.forEach(function (k) { pool[k] = doc[k]; });
+      return { root: doc[keys[0]], name: keys[0], pool: pool };
+    }
+    throw new Error('Could not find a schema. Provide components.schemas, definitions, or a schema object with "type"/"properties".');
+  }
+
+  function resolveRef(ref, pool) {
+    var m = /^#\/(?:components\/schemas|definitions|\$defs)\/(.+)$/.exec(ref);
+    if (!m || !pool.hasOwnProperty(m[1])) throw new Error('Unresolvable $ref: ' + ref);
+    return m[1];
+  }
+
+  function toJsonSchema(s, pool, usedDefs) {
+    if (Array.isArray(s)) return s.map(function (x) { return toJsonSchema(x, pool, usedDefs); });
+    if (!isObj(s)) return s;
+    var o = {}, nullable = false;
+    Object.keys(s).forEach(function (k) {
+      var v = s[k];
+      if (k === 'nullable' || k === 'x-nullable') { nullable = nullable || v === true; return; }
+      if (k === 'discriminator' || k === 'xml' || k === 'externalDocs' || k === 'readOnly' && false) return;
+      if (k === '$ref' && typeof v === 'string') {
+        var name = resolveRef(v, pool); usedDefs[name] = true; o.$ref = '#/$defs/' + name; return;
+      }
+      if (k === 'x-oneOf') k = 'oneOf'; else if (k === 'x-anyOf') k = 'anyOf';
+      if (k === 'properties') {
+        o.properties = {};
+        Object.keys(v || {}).forEach(function (p) { o.properties[p] = toJsonSchema(v[p], pool, usedDefs); });
+      } else if (k === 'example' || k === 'default' || k === 'enum' || k === 'const') o[k] = v;
+      else o[k] = toJsonSchema(v, pool, usedDefs);
+    });
+    if (o.exclusiveMinimum === true && typeof o.minimum === 'number') { o.exclusiveMinimum = o.minimum; delete o.minimum; }
+    else if (o.exclusiveMinimum === false) delete o.exclusiveMinimum;
+    if (o.exclusiveMaximum === true && typeof o.maximum === 'number') { o.exclusiveMaximum = o.maximum; delete o.maximum; }
+    else if (o.exclusiveMaximum === false) delete o.exclusiveMaximum;
+    if (nullable) {
+      if (typeof o.type === 'string') o.type = [o.type, 'null'];
+      else if (Array.isArray(o.type)) { if (o.type.indexOf('null') < 0) o.type.push('null'); }
+      else o = { anyOf: [o, { type: 'null' }] };
+    }
+    return o;
+  }
+
+  function mockFor(s, pool, depth, stack, key) {
+    if (depth > 12 || !isObj(s)) return null;
+    if (s.$ref) {
+      var n = resolveRef(s.$ref, pool);
+      if (stack.indexOf(n) >= 0) return null;
+      return mockFor(pool[n], pool, depth + 1, stack.concat(n), key);
+    }
+    if (s.example !== undefined) return s.example;
+    if (Array.isArray(s.examples) && s.examples.length) return s.examples[0];
+    if (s.default !== undefined) return s.default;
+    if (s.const !== undefined) return s.const;
+    if (Array.isArray(s.enum) && s.enum.length) return s.enum[0];
+    if (Array.isArray(s.allOf)) {
+      var acc = {}, nonObj;
+      s.allOf.forEach(function (p) {
+        var m = mockFor(p, pool, depth + 1, stack, key);
+        if (isObj(m)) Object.assign(acc, m); else if (m !== null) nonObj = m;
+      });
+      return Object.keys(acc).length || nonObj === undefined ? acc : nonObj;
+    }
+    var alt = s.oneOf || s.anyOf || s['x-oneOf'] || s['x-anyOf'];
+    if (Array.isArray(alt) && alt.length) return mockFor(alt[0], pool, depth + 1, stack, key);
+    var type = Array.isArray(s.type) ? (s.type.filter(function (t) { return t !== 'null'; })[0] || 'null') : s.type;
+    if (!type) type = s.properties ? 'object' : s.items ? 'array' : null;
+    switch (type) {
+      case 'object':
+        var o = {};
+        Object.keys(s.properties || {}).forEach(function (k) { o[k] = mockFor(s.properties[k], pool, depth + 1, stack, k); });
+        return o;
+      case 'array':
+        var n2 = Math.max(1, s.minItems || 1);
+        var arr = [];
+        for (var i = 0; i < n2; i++) arr.push(mockFor(s.items || {}, pool, depth + 1, stack, key));
+        return arr;
+      case 'integer': return numMock(s, true);
+      case 'number': return numMock(s, false);
+      case 'boolean': return true;
+      case 'string': return strMock(s, key);
+      case 'null': return null;
+    }
+    return null;
+  }
+  function numMock(s, int) {
+    var v = int ? 1 : 1.5;
+    var lo = typeof s.minimum === 'number' ? s.minimum : null, hi = typeof s.maximum === 'number' ? s.maximum : null;
+    if (typeof s.exclusiveMinimum === 'number') lo = s.exclusiveMinimum + (int ? 1 : 0.5);
+    else if (s.exclusiveMinimum === true && lo !== null) lo += int ? 1 : 0.5;
+    if (typeof s.exclusiveMaximum === 'number') hi = s.exclusiveMaximum - (int ? 1 : 0.5);
+    else if (s.exclusiveMaximum === true && hi !== null) hi -= int ? 1 : 0.5;
+    if (lo !== null && v < lo) v = lo;
+    if (hi !== null && v > hi) v = hi;
+    if (typeof s.multipleOf === 'number' && s.multipleOf > 0 && v % s.multipleOf !== 0) {
+      var m = Math.ceil(v / s.multipleOf) * s.multipleOf;
+      v = (hi !== null && m > hi) ? Math.floor(v / s.multipleOf) * s.multipleOf : m;
+    }
+    return v;
+  }
+  function strMock(s, key) {
+    var f = s.format, v;
+    switch (f) {
+      case 'date-time': v = '2024-01-15T10:30:00Z'; break;
+      case 'date': v = '2024-01-15'; break;
+      case 'time': v = '10:30:00Z'; break;
+      case 'email': v = 'user@example.com'; break;
+      case 'uuid': v = '3fa85f64-5717-4562-b3fc-2c963f66afa6'; break;
+      case 'uri': case 'url': v = 'https://example.com'; break;
+      case 'hostname': v = 'example.com'; break;
+      case 'ipv4': v = '192.168.0.1'; break;
+      case 'ipv6': v = '2001:db8::1'; break;
+      case 'byte': v = 'U3dhZ2dlciByb2Nrcw=='; break;
+      case 'binary': v = 'binary-data'; break;
+      case 'password': v = 'p@ssw0rd'; break;
+      default: v = key ? 'example ' + key : 'string';
+    }
+    if (!f || f === 'password' || f === 'binary') {
+      if (typeof s.minLength === 'number' && v.length < s.minLength) v = v + new Array(s.minLength - v.length + 1).join('x');
+      if (typeof s.maxLength === 'number' && v.length > s.maxLength) v = v.slice(0, s.maxLength);
+    }
+    return v;
+  }
+
+  function specToJson(text, outMode) {
+    var doc = parseYaml(text);
+    var ex = extractSchema(doc);
+    if (outMode === 'mock') return JSON.stringify(mockFor(ex.root, ex.pool, 0, ex.name ? [ex.name] : [], null), null, 2);
+    var used = {}, out = { $schema: 'https://json-schema.org/draft/2020-12/schema' };
+    var body = toJsonSchema(ex.root, ex.pool, used);
+    if (ex.name && !body.title) out.title = ex.name;
+    Object.assign(out, body);
+    var defs = {}, queue = Object.keys(used);
+    while (queue.length) {
+      var n = queue.shift();
+      if (defs[n]) continue;
+      var u = {};
+      defs[n] = toJsonSchema(ex.pool[n], ex.pool, u);
+      Object.keys(u).forEach(function (k) { if (!defs[k]) queue.push(k); });
+    }
+    if (Object.keys(defs).length) out.$defs = defs;
+    return JSON.stringify(out, null, 2);
+  }
+
+  /* ---------------- Samples ---------------- */
+  var SAMPLE_A = JSON.stringify({
+    id: 42, name: 'Ada Lovelace', email: 'ada@example.com', active: true, score: 9.5,
+    createdAt: '2024-01-15T10:30:00Z', manager: null,
+    tags: ['math', 'poetry'],
+    address: { street: '12 St James Sq', zip: '10001' },
+    orders: [{ sku: 'A-1', qty: 2 }, { sku: 'B-7', qty: 1, note: 'gift' }]
+  }, null, 2);
+  var SAMPLE_B = [
+    'components:',
+    '  schemas:',
+    '    User:',
+    '      type: object',
+    '      required:',
+    '        - id',
+    '        - name',
+    '      properties:',
+    '        id:',
+    '          type: integer',
+    '          format: int64',
+    '        name:',
+    '          type: string',
+    '        email:',
+    '          type: string',
+    '          format: email',
+    '        status:',
+    '          type: string',
+    '          enum: [active, inactive]',
+    '        nickname:',
+    '          type: string',
+    '          nullable: true',
+    '        tags:',
+    '          type: array',
+    '          items:',
+    '            type: string',
+    '        address:',
+    '          $ref: "#/components/schemas/Address"',
+    '    Address:',
+    '      type: object',
+    '      properties:',
+    '        street:',
+    '          type: string',
+    '        zip:',
+    '          type: string'
+  ].join('\n');
+
+  /* ---------------- UI ---------------- */
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { mode: 'A', out: 'schema' };
+  var inputs = { A: SAMPLE_A, B: SAMPLE_B };
+  var ACTIVE = ['bg-indigo-600', 'text-white'], IDLE = ['text-slate-300', 'hover:bg-slate-700'];
+
+  function setActive(btn, on) {
+    ACTIVE.forEach(function (c) { btn.classList.toggle(c, on); });
+    IDLE.forEach(function (c) { btn.classList.toggle(c, !on); });
+  }
+  function showError(msg) {
+    $('errorMsg').textContent = msg;
+    $('error').classList.remove('hidden'); $('error').classList.add('flex');
+  }
+  function clearError() { $('error').classList.add('hidden'); $('error').classList.remove('flex'); }
+
+  function render() {
+    document.querySelectorAll('.mode-btn').forEach(function (b) { setActive(b, b.dataset.mode === state.mode); });
+    document.querySelectorAll('.out-btn').forEach(function (b) { setActive(b, b.dataset.out === state.out); });
+    var A = state.mode === 'A';
+    $('optsA').classList.toggle('hidden', !A); $('optsB').classList.toggle('hidden', A);
+    $('inLabel').textContent = A ? 'Input · JSON (payload or schema)' : 'Input · Swagger / OpenAPI YAML';
+    $('outLabel').textContent = A ? 'Output · ' + $('spec').options[$('spec').selectedIndex].text + ' YAML'
+      : 'Output · ' + (state.out === 'schema' ? 'JSON Schema' : 'Mock JSON payload');
+    $('detected').classList.add('hidden');
+    var text = $('input').value;
+    if (!text.trim()) { clearError(); $('output').value = ''; return; }
+    try {
+      if (A) {
+        var r = jsonToSpecYaml(text, $('spec').value, $('schemaName').value);
+        $('output').value = r.text;
+        $('detected').textContent = 'Detected: ' + r.kind;
+        $('detected').classList.remove('hidden');
+      } else $('output').value = specToJson(text, state.out);
+      clearError();
+    } catch (e) {
+      showError(e.message || String(e));
+    }
+  }
+
+  function setMode(m) {
+    inputs[state.mode] = $('input').value;
+    state.mode = m;
+    $('input').value = inputs[m];
+    $('output').value = '';
+    render();
+  }
+  document.querySelectorAll('.mode-btn').forEach(function (b) { b.addEventListener('click', function () { setMode(b.dataset.mode); }); });
+  document.querySelectorAll('.out-btn').forEach(function (b) { b.addEventListener('click', function () { state.out = b.dataset.out; render(); }); });
+  ['input', 'spec', 'schemaName'].forEach(function (id) {
+    $(id).addEventListener('input', render); $(id).addEventListener('change', render);
+  });
+  $('sample').addEventListener('click', function () { $('input').value = state.mode === 'A' ? SAMPLE_A : SAMPLE_B; render(); });
+
+  function copy(btn, src) {
+    var text = $(src).value, orig = 'Copy';
+    function ok() {
+      btn.textContent = '✓ Copied!';
+      btn.classList.add('bg-green-600', 'border-green-500', 'text-white');
+      setTimeout(function () { btn.textContent = orig; btn.classList.remove('bg-green-600', 'border-green-500', 'text-white'); }, 1500);
+    }
+    function fallback() {
+      var ta = $(src), prevRO = ta.readOnly;
+      ta.readOnly = false; ta.select();
+      try { document.execCommand('copy'); ok(); } catch (e) { showError('Copy failed: ' + e.message); }
+      ta.readOnly = prevRO; ta.setSelectionRange(0, 0);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
+    else fallback();
+  }
+  $('copyIn').addEventListener('click', function () { copy(this, 'input'); });
+  $('copyOut').addEventListener('click', function () { copy(this, 'output'); });
+
+  $('input').value = inputs.A;
+  render();
+  window.__converter = { parseYaml: parseYaml, toYaml: toYaml, jsonToSpecYaml: jsonToSpecYaml, specToJson: specToJson };
+})();
+</script>
+</body>
+</html>
